@@ -17,7 +17,7 @@ clawhub install buffer
 Or clone and copy:
 
 ```bash
-git clone https://github.com/cortex-sdk/buffer.git
+git clone https://github.com/sigmalabs-ai/buffer.git
 cp -r buffer/buffer ~/.openclaw/workspace/skills/
 ```
 
