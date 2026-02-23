@@ -81,7 +81,7 @@ This file is the bridge between sessions. It's capped at 2KB — enough for a pr
 
 ## The Five Pillars
 
-Buffer addresses five areas of operational reliability:
+Buffer addresses five areas that determine whether your agent works well over time:
 
 ### 1. Context Window Management
 The context window is a cache, not a database. Buffer treats it that way — controlling what loads, tracking usage, detecting degradation, and wrapping before quality drops. Thresholds are percentage-based so they work across models with different window sizes.
