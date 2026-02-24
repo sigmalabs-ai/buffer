@@ -15,7 +15,7 @@ import { execSync } from 'node:child_process';
 const PORT = parseInt(process.argv[2]) || 8111;
 const __dir = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_FILE = join(homedir(), '.openclaw/agents/main/sessions/sessions.json');
-const HTML_FILE = join(__dir, 'dashboard.html');
+const HTML_FILE = join(__dir, 'buffer-dashboard.html');
 const WORKSPACE = join(homedir(), '.openclaw/workspace');
 
 const WORKSPACE_KEY = 'agent:main:discord:channel:1470820351674945606';
@@ -60,80 +60,14 @@ function getLiveSession(sessionStart) {
   try {
     const content = readFileSync(path, 'utf8');
     const data = JSON.parse(content);
-
-    // Discard stale live-session.json from a previous session
+    // Stale check: if live-session was last updated before the current session started, ignore it
     if (sessionStart && data.updatedAt) {
       const liveTime = new Date(data.updatedAt).getTime();
-      const startTime = new Date(sessionStart).getTime();
-      if (liveTime < startTime) return null; // stale — from before this session
+      const sessTime = new Date(sessionStart).getTime();
+      if (liveTime < sessTime) return null;
     }
-
     return data;
   } catch { return null; }
-}
-
-function getSessionStats(sessionId) {
-  const jsonlPath = join(homedir(), `.openclaw/agents/main/sessions/${sessionId}.jsonl`);
-  if (!existsSync(jsonlPath)) return null;
-
-  try {
-    // Read full file for accurate counts (fast enough for <1MB files)
-    const content = readFileSync(jsonlPath, 'utf8');
-    const lines = content.trim().split('\n');
-
-    let userMessages = 0;
-    let assistantMessages = 0;
-    let toolCalls = 0;
-    let sessionStart = null;
-    let lastTimestamp = null;
-
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === 'session' && entry.timestamp) {
-          sessionStart = entry.timestamp;
-        }
-        if (entry.type === 'message') {
-          const role = entry.message?.role;
-          if (role === 'user') userMessages++;
-          else if (role === 'assistant') assistantMessages++;
-          if (entry.timestamp) lastTimestamp = entry.timestamp;
-        }
-        if (entry.type === 'tool_use') toolCalls++;
-      } catch { continue; }
-    }
-
-    return {
-      userMessages,
-      assistantMessages,
-      toolCalls,
-      totalMessages: userMessages + assistantMessages,
-      sessionStart,
-      lastActivity: lastTimestamp
-    };
-  } catch { return null; }
-}
-
-function parseHandoffSections(content) {
-  const sections = {};
-  let currentSection = null;
-
-  for (const line of content.split('\n')) {
-    if (line.startsWith('## ')) {
-      currentSection = line.replace('## ', '').trim();
-      sections[currentSection] = [];
-    } else if (currentSection && line.trim()) {
-      sections[currentSection].push(line.replace(/^[-*]\s*/, '').trim());
-    }
-  }
-
-  return {
-    currentWork: sections['Current Work']?.[0] || null,
-    stoppingPoint: sections['Stopping Point']?.[0] || null,
-    nextSteps: sections['Next Steps']?.slice(0, 3) || [],
-    openQuestions: (sections['Open Questions'] || []).length,
-    keyOutcomes: sections['Key Outcomes']?.slice(0, 5) || [],
-  };
 }
 
 function getHandoff() {
@@ -141,33 +75,25 @@ function getHandoff() {
   if (!existsSync(path)) return null;
   try {
     const content = readFileSync(path, 'utf8');
-    return {
-      ...parseHandoffSections(content),
-      size: Buffer.byteLength(content),
-      mtime: statSync(path).mtime.toISOString()
-    };
-  } catch { return null; }
-}
+    const sections = {};
+    let currentSection = null;
 
-function getHandoffScratch(sessionStart) {
-  const path = join(WORKSPACE, 'scratch/handoff-scratch.md');
-  if (!existsSync(path)) return null;
-  try {
-    const content = readFileSync(path, 'utf8');
-    const mtime = statSync(path).mtime.toISOString();
-
-    // Only use scratch if it's from the current session
-    if (sessionStart) {
-      const scratchTime = new Date(mtime).getTime();
-      const startTime = new Date(sessionStart).getTime();
-      if (scratchTime < startTime) return null; // stale
+    for (const line of content.split('\n')) {
+      if (line.startsWith('## ')) {
+        currentSection = line.replace('## ', '').trim();
+        sections[currentSection] = [];
+      } else if (currentSection && line.trim()) {
+        sections[currentSection].push(line.replace(/^[-*]\s*/, '').trim());
+      }
     }
 
     return {
-      content,
-      ...parseHandoffSections(content),
-      mtime,
-      isLive: true
+      currentWork: sections['Current Work']?.[0] || null,
+      stoppingPoint: sections['Stopping Point']?.[0] || null,
+      nextSteps: sections['Next Steps']?.slice(0, 3) || [],
+      openQuestions: (sections['Open Questions'] || []).length,
+      size: Buffer.byteLength(content),
+      mtime: statSync(path).mtime.toISOString()
     };
   } catch { return null; }
 }
@@ -237,8 +163,6 @@ function getSessionData() {
   const usage = getLatestUsageFromJSONL(ws.sessionId);
   const sessionStart = getSessionAge(ws.sessionId);
   const live = getLiveSession(sessionStart);
-  const stats = getSessionStats(ws.sessionId);
-  const handoffScratch = getHandoffScratch(sessionStart);
   const handoff = getHandoff();
   const boot = getBootPayload();
   const contextWindow = ws.contextTokens || 1000000;
@@ -257,11 +181,8 @@ function getSessionData() {
     contextUsed: usage ? usage.context : null,
     contextSource: usage ? 'jsonl' : 'unavailable',
     usage,
-    sessionId: ws.sessionId,
     handoff,
-    handoffScratch,
     live,
-    stats,
     boot,
     velocity: Math.round(velocity),
     minutesToWrap
