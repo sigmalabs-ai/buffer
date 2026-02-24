@@ -598,10 +598,31 @@ function getNudge(pct, velocity, minutesToWrap, live) {
 
 async function openHandoff() {
   try {
-    const r = await fetch('/api/handoff');
-    const d = await r.json();
-    document.getElementById('handoff-content').textContent = d.content;
-    document.getElementById('handoff-meta').textContent = d.mtime ? 'Last updated ' + new Date(d.mtime).toLocaleString() : '';
+    // Fetch both context (for scratch) and handoff
+    const [ctxRes, hRes] = await Promise.all([
+      fetch('/api/context'),
+      fetch('/api/handoff')
+    ]);
+    const ctx = await ctxRes.json();
+    const h = await hRes.json();
+
+    const scratch = ctx.handoffScratch;
+    const el = document.getElementById('handoff-content');
+    const meta = document.getElementById('handoff-meta');
+
+    if (scratch && scratch.content) {
+      // Show live scratch file
+      el.textContent = scratch.content;
+      meta.innerHTML = '<span style="color:#22c55e">● LIVE</span> — Updated ' + new Date(scratch.mtime).toLocaleString();
+    } else if (h.content) {
+      // Fall back to HANDOFF.md
+      el.textContent = h.content;
+      meta.textContent = h.mtime ? 'From last session — ' + new Date(h.mtime).toLocaleString() : '';
+    } else {
+      el.textContent = 'No handoff data available.';
+      meta.textContent = '';
+    }
+
     document.getElementById('handoff-modal').classList.add('open');
   } catch(e) {
     document.getElementById('handoff-content').textContent = 'Failed to load: ' + e.message;
@@ -621,6 +642,7 @@ async function refresh() {
     const pct = used / win;
     const z = zone(pct);
     const live = d.live;
+    const stats = d.stats;
     const h = d.handoff;
     const b = d.boot;
 
@@ -668,6 +690,18 @@ async function refresh() {
       }
 
       left += `<div class="feed-footer">Updated ${new Date(live.updatedAt).toLocaleTimeString()}</div>`;
+    } else if (stats) {
+      // No live session file — show derived stats from JSONL
+      left += `
+        <div class="focus-block" style="color:#52525b;border-color:#1e1e22">Session tracking will update as conversation progresses.</div>
+        <div class="feed-section">
+          <div class="card-title" style="margin-top:16px;margin-bottom:8px">Session activity</div>
+          <div class="feed-list">
+            <div class="feed-item topic">${stats.userMessages} user message${stats.userMessages !== 1 ? 's' : ''}, ${stats.assistantMessages} assistant response${stats.assistantMessages !== 1 ? 's' : ''}</div>
+            ${stats.toolCalls ? `<div class="feed-item topic">${stats.toolCalls} tool call${stats.toolCalls !== 1 ? 's' : ''}</div>` : ''}
+            ${stats.lastActivity ? `<div class="feed-item topic">Last activity ${new Date(stats.lastActivity).toLocaleTimeString()}</div>` : ''}
+          </div>
+        </div>`;
     } else if (h && h.currentWork) {
       left += `<div class="focus-block">${h.currentWork}</div>`;
     } else {
