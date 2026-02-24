@@ -54,23 +54,52 @@ function findUsage(obj) {
   return null;
 }
 
-function getLiveSession(sessionStart) {
+function getLiveSession(sessionStart, currentSessionId) {
   const path = join(WORKSPACE, 'scratch/live-session.json');
   if (!existsSync(path)) return null;
   try {
     const content = readFileSync(path, 'utf8');
     const data = JSON.parse(content);
-    // Stale check: if live-session was last updated before the current session started, ignore it
-    if (sessionStart && data.updatedAt) {
-      const liveTime = new Date(data.updatedAt).getTime();
-      const sessTime = new Date(sessionStart).getTime();
-      if (liveTime < sessTime) {
-        // Clean up stale file so dashboard never shows old data
-        try { unlinkSync(path); } catch {}
-        return null;
-      }
+    // Primary stale check: if sessionId is present and doesn't match current session, it's stale
+    if (currentSessionId && data.sessionId && data.sessionId !== currentSessionId) {
+      try { unlinkSync(path); } catch {}
+      return null;
+    }
+    // No sessionId means old-format file — always treat as stale when we have a current session
+    if (!data.sessionId && currentSessionId) {
+      try { unlinkSync(path); } catch {}
+      return null;
     }
     return data;
+  } catch { return null; }
+}
+
+function extractSessionStats(sessionId) {
+  const jsonlPath = join(homedir(), `.openclaw/agents/main/sessions/${sessionId}.jsonl`);
+  if (!existsSync(jsonlPath)) return null;
+  try {
+    const content = execSync(`cat "${jsonlPath}"`, { encoding: 'utf8', timeout: 5000, maxBuffer: 10 * 1024 * 1024 });
+    const lines = content.trim().split('\n');
+    let userMessages = 0;
+    let assistantMessages = 0;
+    let toolCalls = 0;
+    let lastActivity = null;
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const role = entry.role || (entry.message && entry.message.role);
+        if (role === 'user') userMessages++;
+        else if (role === 'assistant') assistantMessages++;
+        else if (role === 'tool' || entry.type === 'tool_result') toolCalls++;
+        const ts = entry.timestamp || entry.ts;
+        if (ts) lastActivity = ts;
+      } catch { continue; }
+    }
+
+    return (userMessages + assistantMessages) > 0
+      ? { userMessages, assistantMessages, toolCalls, lastActivity }
+      : null;
   } catch { return null; }
 }
 
@@ -99,6 +128,20 @@ function getHandoff() {
       size: Buffer.byteLength(content),
       mtime: statSync(path).mtime.toISOString()
     };
+  } catch { return null; }
+}
+
+function getHandoffScratch(sessionStart) {
+  const path = join(WORKSPACE, 'scratch/handoff-scratch.md');
+  if (!existsSync(path)) return null;
+  try {
+    const mtime = statSync(path).mtime.toISOString();
+    // Stale check: if scratch file is older than session start, ignore it
+    if (sessionStart && new Date(mtime).getTime() < new Date(sessionStart).getTime()) {
+      return null;
+    }
+    const content = readFileSync(path, 'utf8');
+    return { content, mtime };
   } catch { return null; }
 }
 
@@ -166,8 +209,10 @@ function getSessionData() {
 
   const usage = getLatestUsageFromJSONL(ws.sessionId);
   const sessionStart = getSessionAge(ws.sessionId);
-  const live = getLiveSession(sessionStart);
+  const live = getLiveSession(sessionStart, ws.sessionId);
+  const stats = !live ? extractSessionStats(ws.sessionId) : null;
   const handoff = getHandoff();
+  const handoffScratch = getHandoffScratch(sessionStart);
   const boot = getBootPayload();
   const contextWindow = ws.contextTokens || 1000000;
 
@@ -186,7 +231,9 @@ function getSessionData() {
     contextSource: usage ? 'jsonl' : 'unavailable',
     usage,
     handoff,
+    handoffScratch,
     live,
+    stats,
     boot,
     velocity: Math.round(velocity),
     minutesToWrap
