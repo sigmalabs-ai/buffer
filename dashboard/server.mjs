@@ -6,7 +6,7 @@
  * Default port: 8111
  */
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -64,7 +64,11 @@ function getLiveSession(sessionStart) {
     if (sessionStart && data.updatedAt) {
       const liveTime = new Date(data.updatedAt).getTime();
       const sessTime = new Date(sessionStart).getTime();
-      if (liveTime < sessTime) return null;
+      if (liveTime < sessTime) {
+        // Clean up stale file so dashboard never shows old data
+        try { unlinkSync(path); } catch {}
+        return null;
+      }
     }
     return data;
   } catch { return null; }
@@ -230,7 +234,7 @@ const server = createServer((req, res) => {
   } else if (req.url === '/api/context') {
     try {
       const data = getSessionData();
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache, no-store' });
       res.end(JSON.stringify(data));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
